@@ -125,8 +125,11 @@ function saveCode() {
 
 /* ------------------- showing Python's shape in the editor --------------- */
 // Python has no braces: a block *is* its indentation, and on a phone that is
-// hard to see. Two quiet decorations make it visible — a faint vertical rule at
-// each indent level, and a wash over the block the cursor is sitting in.
+// hard to see. Three quiet things are drawn — a faint rule at each indent
+// level, that rule in the accent colour where it holds the block the cursor is
+// sitting in, and a wash over that block.
+
+const SCAN_LIMIT = 4000; // a cursor move must never walk a huge file
 
 function indentOf(text) {
   return text.match(/^[ \t]*/)[0].replace(/\t/g, '    ').length;
@@ -135,83 +138,84 @@ function isBlockOpener(text) {
   return /:\s*(#.*)?$/.test(text.trimEnd());
 }
 
-function indentGuides(viewMod, stateMod) {
+// The innermost block the cursor sits in, or null. `base` is the indent of the
+// line that opens it, in spaces.
+function activeBlock(view) {
+  const doc = view.state.doc;
+  const here = doc.lineAt(view.state.selection.main.head);
+  let startNo = here.number;
+  let base = indentOf(here.text);
+
+  // If the cursor is not on a line that opens a block, find the nearest line
+  // above it that is indented less — that is the block it sits inside.
+  if (!isBlockOpener(here.text)) {
+    let seen = 0;
+    for (let n = here.number - 1; n >= 1 && seen < SCAN_LIMIT; n--, seen++) {
+      const t = doc.line(n).text;
+      if (!t.trim()) continue;
+      const ind = indentOf(t);
+      if (ind < base) { startNo = n; base = ind; break; }
+    }
+  }
+  if (!isBlockOpener(doc.line(startNo).text)) return null;
+
+  let endNo = startNo;
+  let seen = 0;
+  for (let n = startNo + 1; n <= doc.lines && seen < SCAN_LIMIT; n++, seen++) {
+    const t = doc.line(n).text;
+    if (!t.trim()) { endNo = n; continue; }
+    if (indentOf(t) <= base) break;
+    endNo = n;
+  }
+  // A blank line before the next statement is not really part of the block, and
+  // tinting it makes the block look one line longer than it is.
+  while (endNo > startNo && !doc.line(endNo).text.trim()) endNo--;
+  if (endNo <= startNo) return null;
+  return { start: startNo, end: endNo, base };
+}
+
+function pythonStructure(viewMod, stateMod) {
   const { ViewPlugin, Decoration } = viewMod;
   const { RangeSetBuilder } = stateMod;
 
   function build(view) {
+    const doc = view.state.doc;
+    const count = doc.lines;
+
+    // Depth per line, in indent units. A blank line takes the depth of the next
+    // real line, so a rule runs through the blank line and stops exactly where
+    // its block stops, instead of breaking wherever a blank line appears.
+    const depth = new Array(count + 2).fill(0);
+    for (let n = 1; n <= count; n++) {
+      const t = doc.line(n).text;
+      depth[n] = t.trim() ? Math.min(12, Math.floor(indentOf(t) / 4)) : -1;
+    }
+    for (let n = count; n >= 1; n--) {
+      if (depth[n] === -1) depth[n] = n < count ? depth[n + 1] : 0;
+    }
+
+    const block = activeBlock(view);
+    const hlAt = block ? `${block.base}ch` : '-20px';
+
     const builder = new RangeSetBuilder();
     for (const { from, to } of view.visibleRanges) {
       let pos = from;
       while (pos <= to) {
-        const line = view.state.doc.lineAt(pos);
-        if (line.text.trim()) {
-          // Guides are drawn in steps of the indent unit, and only as deep as
-          // this line actually goes.
-          const depth = Math.min(12, Math.floor(indentOf(line.text) / 4));
-          if (depth > 0) {
-            builder.add(line.from, line.from, Decoration.line({
-              class: 'cm-guide',
-              attributes: { style: `--guide-depth:${depth}` },
-            }));
-          }
+        const line = doc.lineAt(pos);
+        const n = line.number;
+        const d = depth[n];
+        const inBody = Boolean(block) && n > block.start && n <= block.end;
+        if (d > 0 || inBody) {
+          builder.add(line.from, line.from, Decoration.line({
+            class: inBody ? 'cm-guide cm-scope' : 'cm-guide',
+            attributes: {
+              style: `--guide-depth:${d};--hl-pos:${inBody ? hlAt : '-20px'}`,
+            },
+          }));
         }
-        if (line.to >= view.state.doc.length) break;
+        if (line.to >= doc.length) break;
         pos = line.to + 1;
       }
-    }
-    return builder.finish();
-  }
-
-  return ViewPlugin.fromClass(class {
-    constructor(view) { this.decorations = build(view); }
-    update(u) { if (u.docChanged || u.viewportChanged) this.decorations = build(u.view); }
-  }, { decorations: (v) => v.decorations });
-}
-
-function activeScope(viewMod, stateMod) {
-  const { ViewPlugin, Decoration } = viewMod;
-  const { RangeSetBuilder } = stateMod;
-  const SCAN_LIMIT = 4000; // a cursor move must never walk a huge file
-
-  function build(view) {
-    const doc = view.state.doc;
-    const head = view.state.selection.main.head;
-    const here = doc.lineAt(head);
-    let startNo = here.number;
-    let base = indentOf(here.text);
-
-    // If the cursor is not on a line that opens a block, find the nearest line
-    // above it that is indented less — that is the block it sits inside.
-    if (!isBlockOpener(here.text)) {
-      let seen = 0;
-      for (let n = here.number - 1; n >= 1 && seen < SCAN_LIMIT; n--, seen++) {
-        const t = doc.line(n).text;
-        if (!t.trim()) continue;
-        const ind = indentOf(t);
-        if (ind < base) { startNo = n; base = ind; break; }
-      }
-    }
-    const opener = doc.line(startNo);
-    if (!isBlockOpener(opener.text)) return Decoration.none;
-
-    let endNo = startNo;
-    let seen = 0;
-    for (let n = startNo + 1; n <= doc.lines && seen < SCAN_LIMIT; n++, seen++) {
-      const t = doc.line(n).text;
-      if (!t.trim()) { endNo = n; continue; }
-      if (indentOf(t) <= base) break;
-      endNo = n;
-    }
-    // A blank line before the next statement is not really part of the block,
-    // and tinting it makes the block look one line longer than it is.
-    while (endNo > startNo && !doc.line(endNo).text.trim()) endNo--;
-    if (endNo <= startNo) return Decoration.none;
-
-    const builder = new RangeSetBuilder();
-    for (let n = startNo; n <= endNo; n++) {
-      const l = doc.line(n);
-      builder.add(l.from, l.from, Decoration.line({ class: 'cm-scope' }));
     }
     return builder.finish();
   }
@@ -261,8 +265,7 @@ async function initEditor() {
         // button inserts four, and the file ends up with both.
         lang.indentUnit.of('    '),
         theme.oneDark,
-        indentGuides(cmView2, cmState),
-        activeScope(cmView2, cmState),
+        pythonStructure(cmView2, cmState),
         cm.EditorView.lineWrapping,
         cm.EditorView.theme({
           '&': { height: '100%', fontSize: '15px' },

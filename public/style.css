@@ -8,6 +8,7 @@
   /* editor: indent rules and the block the cursor is in */
   --editor-guide: rgba(255, 255, 255, 0.11);
   --editor-scope: rgba(47, 129, 247, 0.13);
+  --editor-guide-active: #4c9aff;
   --bg-elev: #161b22;
   --bg-elev-2: #1f2630;
   --border: #2b323d;
@@ -560,15 +561,26 @@ textarea, input { font-size: 16px; }
    wash over the block the cursor is in. Both are deliberately low-contrast so
    they read as background, not as more syntax colour. */
 .cm-guide {
-  background-image: repeating-linear-gradient(
-    to right,
-    var(--editor-guide) 0 1px,
-    transparent 1px 4ch
-  );
+  /* Two layers: the rule that holds the block the cursor is in, drawn in the
+     accent colour at --hl-pos (kept off-screen with a negative position when
+     there is none), over the faint rules of every level this line reaches. */
+  background-image:
+    linear-gradient(
+      to right,
+      transparent var(--hl-pos, -20px),
+      var(--editor-guide-active) var(--hl-pos, -20px),
+      var(--editor-guide-active) calc(var(--hl-pos, -20px) + 2px),
+      transparent calc(var(--hl-pos, -20px) + 2px)
+    ),
+    repeating-linear-gradient(
+      to right,
+      var(--editor-guide) 0 1px,
+      transparent 1px 4ch
+    );
   background-repeat: no-repeat;
   background-position: 0 0;
-  /* the gradient tiles every 4ch; this clips it to this line's depth */
-  background-size: calc(var(--guide-depth) * 4ch) 100%;
+  /* the second gradient tiles every 4ch; this clips it to this line's depth */
+  background-size: 100% 100%, calc(var(--guide-depth, 0) * 4ch) 100%;
 }
 .cm-scope {
   background-color: var(--editor-scope);
