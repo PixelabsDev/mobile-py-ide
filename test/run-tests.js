@@ -258,6 +258,63 @@ check('a carriage-return redraw does not duplicate the line', () => {
   assert.equal(out, '$ echo hi\nhi\n$ ');
 });
 
+console.log('\nExplaining a traceback');
+// Read the hint table and the frame picker straight out of the page's script, so
+// this tests what the browser actually runs.
+{
+  const src = await fs.readFile(new URL('../public/main.js', import.meta.url), 'utf8');
+  const start = src.indexOf('const ERROR_HINTS = [');
+  const end = src.indexOf('\n];', start);
+  assert.ok(start !== -1 && end !== -1, 'the hint table is where the test expects it');
+  // eslint-disable-next-line no-eval
+  const hints = eval(src.slice(start + 'const ERROR_HINTS = '.length, end + 2));
+
+  const hintFor = (text) => {
+    for (const [re, msg] of hints) {
+      const m = text.match(re);
+      if (m) return typeof msg === 'function' ? msg(m) : msg;
+    }
+    return null;
+  };
+
+  check('a 403 is explained', () => {
+    assert.match(hintFor('urllib.error.HTTPError: HTTP Error 403: Forbidden'), /403 Forbidden/);
+  });
+  check('a name that cannot be resolved is explained', () => {
+    assert.match(hintFor('urllib.error.URLError: <urlopen error [Errno -2] Name or service not known>'), /looked up/);
+  });
+  check('broken JSON is explained', () => {
+    assert.match(hintFor('json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)'), /valid JSON/);
+  });
+
+  // The reader's own case: a call into urllib ends with a frame in request.py,
+  // and the line they can actually fix is the one in their own file.
+  const tb = [
+    'Traceback (most recent call last):',
+    '  File "/tmp/mobi-py-Ab12/exec_9f8e7d.py", line 4, in <module>',
+    '    urllib.request.urlopen("https://1.1.1.1", timeout=5)',
+    '  File "/usr/lib/python3.14/urllib/request.py", line 187, in urlopen',
+    '    return opener.open(url, data, timeout)',
+    '  File "/usr/lib/python3.14/urllib/request.py", line 611, in http_error_default',
+    '    raise HTTPError(req.full_url, code, msg, hdrs, fp)',
+    'urllib.error.HTTPError: HTTP Error 403: Forbidden',
+  ].join('\n');
+
+  const pick = (text) => {
+    const frames = [...text.matchAll(/File "([^"]+)", line (\d+)/g)].map((m) => ({ file: m[1], line: Number(m[2]) }));
+    const isLib = (f) => /\/python\d+(\.\d+)?\//.test(f) || f.includes('site-packages') || f.includes('/lib/python');
+    const own = frames.filter((f) => !isLib(f.file));
+    return own.length ? own[own.length - 1].line : null;
+  };
+
+  check('the line offered is the reader\'s own, not one inside Python', () => {
+    assert.equal(pick(tb), 4);
+  });
+  check('a traceback with no frame in the reader\'s file offers no line', () => {
+    assert.equal(pick('  File "/usr/lib/python3.14/x.py", line 611, in f'), null);
+  });
+}
+
 console.log('\nStreaming output');
 await checkAsync('a chatty program is batched, and still arrives whole', async () => {
   const run = await createRun('for i in range(20000):\n    print(i % 10, end="", flush=True)\nprint()\n',

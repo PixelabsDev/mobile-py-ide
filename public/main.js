@@ -1049,12 +1049,38 @@ const ERROR_HINTS = [
   [/FileNotFoundError/, 'that file is not in the workspace — check the name under Files'],
   [/ModuleNotFoundError: No module named '([^']+)'/, (m) => `${m[1]} is not installed — open Packages and add it`],
   [/RecursionError/, 'a function keeps calling itself and never stops'],
+  [/json\.decoder\.JSONDecodeError|JSONDecodeError/, 'that text is not valid JSON — look for a missing quote, comma or brace'],
+  [/ValueError: time data .* does not match format/, 'the date does not match the format you gave it — check the %Y-%m-%d style pattern against the text'],
+  [/urllib\.error\.HTTPError: HTTP Error 403/, 'the site answered 403 Forbidden — it refused the request. Some sites turn away anything that does not look like a browser'],
+  [/urllib\.error\.HTTPError: HTTP Error 404/, 'the site answered 404 Not Found — there is nothing at that address'],
+  [/urllib\.error\.HTTPError: HTTP Error (\d+)/, (m) => `the site answered HTTP ${m[1]} — the request reached it, but it refused`],
+  [/URLError: <urlopen error timed out>/, 'the site did not answer in time — it may be slow, or blocked'],
+  [/URLError: <urlopen error \[Errno -2\]/, 'that address could not be looked up — check the spelling'],
+  [/URLError: <urlopen error \[Errno -3\]/, 'that address could not be looked up right now — the name service did not answer'],
+  [/urllib\.error\.URLError: (.+)/, (m) => `the address could not be reached: ${m[1]}`],
+  [/SSLError/, 'the secure connection could not be set up'],
 ];
+
+// A traceback carries a frame for every call on the way down, and most of them
+// are inside Python itself — a call to urllib can end with the reader being
+// offered line 611 of request.py, a file they cannot see. The line worth
+// offering is the last one in their own file.
+function isLibraryFrame(file) {
+  return /\/python\d+(\.\d+)?\//.test(file) || file.includes('site-packages') || file.includes('/lib/python');
+}
+
+function userFrameLine(text) {
+  const frames = [...text.matchAll(/File "([^"]+)", line (\d+)/g)]
+    .map((m) => ({ file: m[1], line: Number(m[2]) }));
+  if (!frames.length) return null;
+  const own = frames.filter((f) => !isLibraryFrame(f.file));
+  if (!own.length) return null;
+  return own[own.length - 1].line;
+}
 
 function explainError(text) {
   if (!text) return;
-  const lines = [...text.matchAll(/line (\d+)/g)].map((m) => Number(m[1]));
-  const line = lines.length ? lines[lines.length - 1] : null;
+  const line = userFrameLine(text);
   let hint = null;
   for (const [re, msg] of ERROR_HINTS) {
     const m = text.match(re);
