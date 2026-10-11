@@ -63,6 +63,22 @@ jobs:
           sudo -u mobilepy git -C "$APP_DIR" fetch --depth 1 origin main
           sudo -u mobilepy git -C "$APP_DIR" reset --hard origin/main
 
+          echo "==> Letting ssh remember host keys"
+          # The service runs with ProtectHome=true, so ssh cannot write the
+          # known_hosts in the service user's home: it warns on every connection
+          # and never remembers a host key, which means the fingerprint has to be
+          # confirmed again each time and a changed key would go unnoticed.
+          # Point ssh at the one directory the service may write, its workspace.
+          sudo install -d -m 755 /etc/ssh/ssh_config.d
+          printf '%s\n' \
+            '# Written by the PyPad deploy.' \
+            '# The IDE runs ssh inside a service whose home is hidden by' \
+            '# ProtectHome=true, so it could not write its known_hosts.' \
+            'UserKnownHostsFile /opt/mobile-py-ide/workspace/.known_hosts' \
+            | sudo tee /etc/ssh/ssh_config.d/10-pypad.conf >/dev/null
+          sudo chmod 644 /etc/ssh/ssh_config.d/10-pypad.conf
+          sudo ssh -G localhost 2>/dev/null | grep -i '^userknownhostsfile' || true
+
           echo "==> Restarting service"
           # Keep the sandbox line in step with the repo. Only this one line is
           # touched, so any local edits to the unit are left alone.
