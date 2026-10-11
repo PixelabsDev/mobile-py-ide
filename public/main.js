@@ -207,14 +207,15 @@ function pythonStructure(viewMod, stateMod) {
         const n = line.number;
         const d = depth[n];
         const inBody = Boolean(block) && n > block.start && n <= block.end;
-        if (d > 0 || inBody) {
-          builder.add(line.from, line.from, Decoration.line({
-            class: 'cm-guide',
-            attributes: {
-              style: `--guide-depth:${d};--hl-pos:${inBody ? hlAt : '-20px'}`,
-            },
-          }));
-        }
+        // The wrap indent is the line's own indentation, so a long line that
+        // wraps continues under the code rather than at column 0.
+        const indent = line.text.trim() ? indentOf(line.text) : 0;
+        builder.add(line.from, line.from, Decoration.line({
+          class: 'cm-guide',
+          attributes: {
+            style: `--guide-depth:${d};--hl-pos:${inBody ? hlAt : '-20px'};--wrap-indent:${indent}ch`,
+          },
+        }));
         if (line.to >= doc.length) break;
         pos = line.to + 1;
       }
