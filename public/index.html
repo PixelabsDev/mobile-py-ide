@@ -10,6 +10,16 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="description" content="PyPad — a lightweight, sandboxed Python IDE that works on phone and desktop." />
   <title>PyPad</title>
+  <!-- Start the editor's modules downloading while the page is still being
+       parsed. They come from a CDN, and over a phone connection that takes
+       seconds; until they arrive the plain editor is what the reader has. -->
+  <link rel="modulepreload" href="https://esm.sh/codemirror@6.0.1" crossorigin />
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/lang-python@6.1.6" crossorigin />
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/theme-one-dark@6.1.2" crossorigin />
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/commands@^6.0.0?target=es2022" crossorigin />
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/language@^6.8.0?target=es2022" crossorigin />
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/view@^6.0.0?target=es2022" crossorigin />
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/state@^6.0.0?target=es2022" crossorigin />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%8D%3C/text%3E%3C/svg%3E" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />

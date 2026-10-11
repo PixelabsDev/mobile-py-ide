@@ -123,10 +123,116 @@ function saveCode() {
   }, 400);
 }
 
+/* ------------------- showing Python's shape in the editor --------------- */
+// Python has no braces: a block *is* its indentation, and on a phone that is
+// hard to see. Two quiet decorations make it visible — a faint vertical rule at
+// each indent level, and a wash over the block the cursor is sitting in.
+
+function indentOf(text) {
+  return text.match(/^[ \t]*/)[0].replace(/\t/g, '    ').length;
+}
+function isBlockOpener(text) {
+  return /:\s*(#.*)?$/.test(text.trimEnd());
+}
+
+function indentGuides(viewMod, stateMod) {
+  const { ViewPlugin, Decoration } = viewMod;
+  const { RangeSetBuilder } = stateMod;
+
+  function build(view) {
+    const builder = new RangeSetBuilder();
+    for (const { from, to } of view.visibleRanges) {
+      let pos = from;
+      while (pos <= to) {
+        const line = view.state.doc.lineAt(pos);
+        if (line.text.trim()) {
+          // Guides are drawn in steps of the indent unit, and only as deep as
+          // this line actually goes.
+          const depth = Math.min(12, Math.floor(indentOf(line.text) / 4));
+          if (depth > 0) {
+            builder.add(line.from, line.from, Decoration.line({
+              class: 'cm-guide',
+              attributes: { style: `--guide-depth:${depth}` },
+            }));
+          }
+        }
+        if (line.to >= view.state.doc.length) break;
+        pos = line.to + 1;
+      }
+    }
+    return builder.finish();
+  }
+
+  return ViewPlugin.fromClass(class {
+    constructor(view) { this.decorations = build(view); }
+    update(u) { if (u.docChanged || u.viewportChanged) this.decorations = build(u.view); }
+  }, { decorations: (v) => v.decorations });
+}
+
+function activeScope(viewMod, stateMod) {
+  const { ViewPlugin, Decoration } = viewMod;
+  const { RangeSetBuilder } = stateMod;
+  const SCAN_LIMIT = 4000; // a cursor move must never walk a huge file
+
+  function build(view) {
+    const doc = view.state.doc;
+    const head = view.state.selection.main.head;
+    const here = doc.lineAt(head);
+    let startNo = here.number;
+    let base = indentOf(here.text);
+
+    // If the cursor is not on a line that opens a block, find the nearest line
+    // above it that is indented less — that is the block it sits inside.
+    if (!isBlockOpener(here.text)) {
+      let seen = 0;
+      for (let n = here.number - 1; n >= 1 && seen < SCAN_LIMIT; n--, seen++) {
+        const t = doc.line(n).text;
+        if (!t.trim()) continue;
+        const ind = indentOf(t);
+        if (ind < base) { startNo = n; base = ind; break; }
+      }
+    }
+    const opener = doc.line(startNo);
+    if (!isBlockOpener(opener.text)) return Decoration.none;
+
+    let endNo = startNo;
+    let seen = 0;
+    for (let n = startNo + 1; n <= doc.lines && seen < SCAN_LIMIT; n++, seen++) {
+      const t = doc.line(n).text;
+      if (!t.trim()) { endNo = n; continue; }
+      if (indentOf(t) <= base) break;
+      endNo = n;
+    }
+    // A blank line before the next statement is not really part of the block,
+    // and tinting it makes the block look one line longer than it is.
+    while (endNo > startNo && !doc.line(endNo).text.trim()) endNo--;
+    if (endNo <= startNo) return Decoration.none;
+
+    const builder = new RangeSetBuilder();
+    for (let n = startNo; n <= endNo; n++) {
+      const l = doc.line(n);
+      builder.add(l.from, l.from, Decoration.line({ class: 'cm-scope' }));
+    }
+    return builder.finish();
+  }
+
+  return ViewPlugin.fromClass(class {
+    constructor(view) { this.decorations = build(view); }
+    update(u) {
+      if (u.docChanged || u.selectionSet || u.viewportChanged) this.decorations = build(u.view);
+    }
+  }, { decorations: (v) => v.decorations });
+}
+
 async function initEditor() {
   const initial = loadStored(STORAGE_CODE, DEFAULT_CODE);
+  // Show the saved code straight away, in the plain editor. CodeMirror arrives
+  // over the network, and until it does this textarea is what the reader sees —
+  // an empty one for a few seconds, and anything typed into it was thrown away
+  // the moment CodeMirror took over.
+  fallback.value = initial;
   try {
-    const [cm, py, theme, commands, lang] = await Promise.all([
+    const [cm, py, theme, commands, lang, cmView2, cmState] = await Promise.all([
       import('https://esm.sh/codemirror@6.0.1'),
       import('https://esm.sh/@codemirror/lang-python@6.1.6'),
       import('https://esm.sh/@codemirror/theme-one-dark@6.1.2'),
@@ -136,11 +242,18 @@ async function initEditor() {
       // The exact specifier @codemirror/lang-python itself imports — a different
       // one would be a second copy of the package, and its settings ignored.
       import('https://esm.sh/@codemirror/language@^6.8.0?target=es2022'),
+      // The specifiers basicSetup itself pulls in, so these are the same copies
+      // and their decorations belong to the same editor.
+      import('https://esm.sh/@codemirror/view@^6.0.0?target=es2022'),
+      import('https://esm.sh/@codemirror/state@^6.0.0?target=es2022'),
     ]);
     cmCommands = commands;
+    // Whatever is in the plain editor now: the saved code, or the reader's own
+    // typing if they got there before CodeMirror did.
+    const seed = fallback.value;
 
     cmView = new cm.EditorView({
-      doc: initial,
+      doc: seed,
       extensions: [
         cm.basicSetup,
         py.python(),
@@ -148,6 +261,8 @@ async function initEditor() {
         // button inserts four, and the file ends up with both.
         lang.indentUnit.of('    '),
         theme.oneDark,
+        indentGuides(cmView2, cmState),
+        activeScope(cmView2, cmState),
         cm.EditorView.lineWrapping,
         cm.EditorView.theme({
           '&': { height: '100%', fontSize: '15px' },
@@ -171,7 +286,6 @@ async function initEditor() {
     usingCM = false;
     editorMount.style.display = 'none';
     fallback.style.display = 'block';
-    fallback.value = initial;
     fallback.addEventListener('input', saveCode);
     fallback.addEventListener('keydown', (e) => {
       if (e.key === 'Tab') { e.preventDefault(); insertText('    '); }

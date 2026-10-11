@@ -5,6 +5,9 @@
   /* The console is a terminal, so it gets a proper black — deeper than the
      app's own background, which is a dark blue-grey. */
   --term-bg: #000000;
+  /* editor: indent rules and the block the cursor is in */
+  --editor-guide: rgba(255, 255, 255, 0.11);
+  --editor-scope: rgba(47, 129, 247, 0.13);
   --bg-elev: #161b22;
   --bg-elev-2: #1f2630;
   --border: #2b323d;
@@ -549,4 +552,24 @@ textarea, input { font-size: 16px; }
 
   .console-output { font-size: 14px; }
   .prefill .stdin-box { height: 64px; }
+}
+
+/* ---------- Python's shape, drawn in the editor ----------
+   A block in Python is its indentation, which a phone screen makes hard to
+   follow. Two quiet decorations help: a faint rule at each indent level, and a
+   wash over the block the cursor is in. Both are deliberately low-contrast so
+   they read as background, not as more syntax colour. */
+.cm-guide {
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--editor-guide) 0 1px,
+    transparent 1px 4ch
+  );
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  /* the gradient tiles every 4ch; this clips it to this line's depth */
+  background-size: calc(var(--guide-depth) * 4ch) 100%;
+}
+.cm-scope {
+  background-color: var(--editor-scope);
 }
