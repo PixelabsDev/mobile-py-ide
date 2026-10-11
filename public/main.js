@@ -1104,7 +1104,11 @@ async function openInEditor(f) {
     fileNameInput.value = f.name;
     rememberName(f.name);
     filesDialog.close();
-    switchTab('code');
+    // The editor only exists in Script mode, and the tab is called "editor".
+    // Opening a file from Terminal or REPL used to switch to a tab that does not
+    // exist, which hid both panels and left the reader looking at a blank screen.
+    if (mode !== 'script') setMode('script');
+    switchTab('editor');
     setStatus('success', `Opened ${f.name}. Edit it, then Save .py to write it back.`);
   } catch (err) {
     fileSay(`Could not open ${f.name}: ${err.message}`, true);

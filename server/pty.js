@@ -19,6 +19,11 @@ try:
     rc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bashrc")
     with open(rc, "w") as f:
         f.write("PS1='$ '\\n")
+        # bash would otherwise keep its history in the service user's home,
+        # which is the visitor's workspace: every shell command left a
+        # .bash_history there for the reader to trip over. Keep it with the
+        # run's scratch files instead, which go when the run ends.
+        f.write("export HISTFILE=%s/.bash_history\\n" % os.path.dirname(os.path.abspath(__file__)))
 except Exception:
     rc = None
 
