@@ -6,8 +6,7 @@
      app's own background, which is a dark blue-grey. */
   --term-bg: #000000;
   /* editor: indent rules and the block the cursor is in */
-  --editor-guide: rgba(255, 255, 255, 0.11);
-  --editor-scope: rgba(47, 129, 247, 0.13);
+  --editor-guide: rgba(255, 255, 255, 0.13);
   --editor-guide-active: #4c9aff;
   --bg-elev: #161b22;
   --bg-elev-2: #1f2630;
@@ -557,9 +556,10 @@ textarea, input { font-size: 16px; }
 
 /* ---------- Python's shape, drawn in the editor ----------
    A block in Python is its indentation, which a phone screen makes hard to
-   follow. Two quiet decorations help: a faint rule at each indent level, and a
-   wash over the block the cursor is in. Both are deliberately low-contrast so
-   they read as background, not as more syntax colour. */
+   follow. A faint rule marks every indent level, and the rule that holds the
+   block the cursor is in is drawn in the accent colour instead. The block is
+   not shaded: a tint across a group of lines reads as a text selection, and
+   the rule says the same thing without that ambiguity. */
 .cm-guide {
   /* Two layers: the rule that holds the block the cursor is in, drawn in the
      accent colour at --hl-pos (kept off-screen with a negative position when
@@ -581,7 +581,4 @@ textarea, input { font-size: 16px; }
   background-position: 0 0;
   /* the second gradient tiles every 4ch; this clips it to this line's depth */
   background-size: 100% 100%, calc(var(--guide-depth, 0) * 4ch) 100%;
-}
-.cm-scope {
-  background-color: var(--editor-scope);
 }

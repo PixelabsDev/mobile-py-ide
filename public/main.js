@@ -125,9 +125,11 @@ function saveCode() {
 
 /* ------------------- showing Python's shape in the editor --------------- */
 // Python has no braces: a block *is* its indentation, and on a phone that is
-// hard to see. Three quiet things are drawn — a faint rule at each indent
-// level, that rule in the accent colour where it holds the block the cursor is
-// sitting in, and a wash over that block.
+// hard to see. Two quiet things are drawn — a faint rule at each indent level,
+// and that rule in the accent colour where it holds the block the cursor is
+// sitting in. The block is deliberately *not* shaded: a tint over a group of
+// lines reads as a text selection, and the vertical line says the same thing
+// without the ambiguity.
 
 const SCAN_LIMIT = 4000; // a cursor move must never walk a huge file
 
@@ -207,7 +209,7 @@ function pythonStructure(viewMod, stateMod) {
         const inBody = Boolean(block) && n > block.start && n <= block.end;
         if (d > 0 || inBody) {
           builder.add(line.from, line.from, Decoration.line({
-            class: inBody ? 'cm-guide cm-scope' : 'cm-guide',
+            class: 'cm-guide',
             attributes: {
               style: `--guide-depth:${d};--hl-pos:${inBody ? hlAt : '-20px'}`,
             },
