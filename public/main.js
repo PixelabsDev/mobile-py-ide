@@ -293,10 +293,7 @@ async function initEditor() {
     editorMount.style.display = 'none';
     fallback.style.display = 'block';
     fallback.addEventListener('input', saveCode);
-    fallback.addEventListener('keydown', (e) => {
-      if (e.key === 'Tab') { e.preventDefault(); insertText('    '); }
-      else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); onRunClick(); }
-    });
+    fallback.addEventListener('keydown', handleFallbackKeydown);
   }
 }
 
@@ -378,16 +375,103 @@ function unindent() {
 
 // The same thing for the plain-textarea editor.
 function unindentFallback() {
+  editFallbackIndent(false);
+}
+
+// Apply or remove one four-space level on every touched line. Keep selections
+// intact so toolbar indentation works the same as it does in CodeMirror.
+function editFallbackIndent(add) {
   const el = fallback;
-  const pos = el.selectionStart ?? 0;
-  const lineStart = el.value.lastIndexOf('\n', pos - 1) + 1;
-  const strip = el.value.slice(lineStart, lineStart + 4).match(/^\t|^ {1,4}/);
-  if (!strip) return;
-  const n = strip[0].length;
-  el.value = el.value.slice(0, lineStart) + el.value.slice(lineStart + n);
-  el.selectionStart = el.selectionEnd = Math.max(lineStart, pos - n);
+  const value = el.value;
+  const start = el.selectionStart ?? 0;
+  const end = el.selectionEnd ?? start;
+  const first = value.lastIndexOf('\n', start - 1) + 1;
+  const lastProbe = end > start && value[end - 1] === '\n' ? end - 1 : end;
+  const edits = [];
+  for (let lineStart = first; lineStart <= lastProbe;) {
+    if (add) edits.push({ from: lineStart, to: lineStart, text: '    ' });
+    else {
+      const indent = value.slice(lineStart).match(/^(?:\t| {1,4})/);
+      if (indent) edits.push({ from: lineStart, to: lineStart + indent[0].length, text: '' });
+    }
+    const newline = value.indexOf('\n', lineStart);
+    if (newline < 0 || newline >= lastProbe) break;
+    lineStart = newline + 1;
+  }
+  if (!edits.length) return;
+
+  const mapOffset = (offset) => offset + edits.reduce((delta, edit) =>
+    edit.from <= offset ? delta + edit.text.length - (edit.to - edit.from) : delta, 0);
+  const nextStart = mapOffset(start);
+  const nextEnd = mapOffset(end);
+  let next = value;
+  for (const edit of [...edits].reverse()) {
+    next = next.slice(0, edit.from) + edit.text + next.slice(edit.to);
+  }
+  el.value = next;
+  el.setSelectionRange(nextStart, nextEnd);
   el.focus();
+  el.dispatchEvent(new Event('input', { bubbles: true }));
   saveCode();
+}
+
+function handleFallbackKeydown(e) {
+  const el = fallback;
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    onRunClick();
+    return;
+  }
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    if (e.shiftKey) editFallbackIndent(false);
+    else if (el.selectionStart !== el.selectionEnd) editFallbackIndent(true);
+    else insertText('    ');
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? start;
+    const lineStart = el.value.lastIndexOf('\n', start - 1) + 1;
+    const before = el.value.slice(lineStart, start);
+    let indent = (before.match(/^[ \t]*/) || [''])[0];
+    if (/^\s*(?:return\b|pass\b|break\b|continue\b|raise\b)/.test(before)) {
+      indent = indent.replace(/\t| {1,4}$/, '');
+    } else if (/:(?:\s*#.*)?\s*$/.test(before)) {
+      indent += '    ';
+    }
+    el.setRangeText(`\n${indent}`, start, end, 'end');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
+  if (e.key === 'Backspace' && el.selectionStart === el.selectionEnd) {
+    const pos = el.selectionStart;
+    const lineStart = el.value.lastIndexOf('\n', pos - 1) + 1;
+    const before = el.value.slice(lineStart, pos);
+    if (/^(?:\t| )+$/.test(before)) {
+      e.preventDefault();
+      const remove = before.endsWith('\t') ? 1 : (before.length % 4 || Math.min(4, before.length));
+      el.setRangeText('', pos - remove, pos, 'end');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
+  }
+  const pairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'" };
+  const start = el.selectionStart ?? 0;
+  const end = el.selectionEnd ?? start;
+  if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (start === end && Object.values(pairs).includes(e.key) && el.value[start] === e.key) {
+      e.preventDefault();
+      el.setSelectionRange(start + 1, start + 1);
+    } else if (pairs[e.key]) {
+      e.preventDefault();
+      const selected = el.value.slice(start, end);
+      el.setRangeText(e.key + selected + pairs[e.key], start, end, 'end');
+      el.setSelectionRange(start + 1, start + 1 + selected.length);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
 }
 
 /* ------------------- shell history, and Ctrl+C ------------------------ */
