@@ -456,6 +456,7 @@ const server = http.createServer(async (req, res) => {
 
       sseOpen(res);
       const hb = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* gone */ } }, 15000);
+      const lastEventId = Number.parseInt(req.headers['last-event-id'], 10) || 0;
       const unsub = run.subscribe((evt) => {
         try {
           // The console is plain text, so the base64 copy of a terminal chunk is
@@ -463,12 +464,12 @@ const server = http.createServer(async (req, res) => {
           // bytes themselves. That also keeps this stream readable to a browser
           // running an older copy of the page.
           const out = evt.type === 'output' && evt.b64
-            ? { type: 'output', stream: evt.stream || 'stdout', text: evt.text ?? '' }
+            ? { id: evt.id, type: 'output', stream: evt.stream || 'stdout', text: evt.text ?? '' }
             : evt;
-          res.write(`data: ${JSON.stringify(out)}\n\n`);
+          res.write(`id: ${evt.id}\ndata: ${JSON.stringify(out)}\n\n`);
           if (evt.type === 'exit') { clearInterval(hb); res.end(); }
         } catch { /* client gone */ }
-      });
+      }, lastEventId);
       req.on('close', () => { clearInterval(hb); unsub(); });
       return undefined;
     }

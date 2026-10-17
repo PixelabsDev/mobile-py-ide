@@ -82,6 +82,7 @@ let runId = null;
 let outputEmpty = true;
 let mode = 'script';
 let receivedEvents = false;
+let lastRunEventId = 0;
 // What the current run wrote to stderr, so a traceback can be read back later.
 let runStderr = '';
 // True when the run is under a real pseudoterminal, which changes what comes
@@ -683,10 +684,17 @@ async function startRun() {
 
 function openStream(id) {
   receivedEvents = false;
+  lastRunEventId = 0;
   es = new EventSource(`/api/runs/${id}/events`);
   es.onmessage = (ev) => {
     let e;
     try { e = JSON.parse(ev.data); } catch { return; }
+    // EventSource reconnects on a dropped connection and sends Last-Event-ID.
+    // Runs replay their history, so ignore anything the page already rendered.
+    if (Number.isFinite(e.id)) {
+      if (e.id <= lastRunEventId) return;
+      lastRunEventId = e.id;
+    }
     receivedEvents = true;
     if (e.type === 'output') {
       if (e.stream === 'stderr') runStderr += e.text;
@@ -696,8 +704,10 @@ function openStream(id) {
     }
   };
   es.onerror = async () => {
-    // Fires on a normal close too. If the stream never delivered anything,
-    // fetch the result directly instead of showing a bare error.
+    // EventSource retries while CONNECTING. Keep it alive so a transient
+    // mobile-network drop does not turn an active run into an error.
+    if (es && es.readyState === EventSource.CONNECTING) return;
+    // If the stream is permanently closed, use the result endpoint as fallback.
     if (es) { es.close(); es = null; }
     const id2 = runId;
     if (!id2) return;

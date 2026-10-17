@@ -87,7 +87,8 @@ const config = {
 
   // Interactive runs (streaming): killed after this much inactivity with no
   // output and no input, and hard-killed at the absolute cap.
-  runIdleMs: num('RUN_IDLE_MS', 30000),
+  // Temporary testing value; restore to 30000 when requested.
+  runIdleMs: num('RUN_IDLE_MS', 120000),
   runMaxMs: num('RUN_MAX_MS', 120000),
   // How long a finished run is kept so a late SSE subscriber still gets its
   // output (a fast program can finish before the browser attaches).

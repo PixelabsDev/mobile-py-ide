@@ -238,7 +238,7 @@ Copy `.env.example` to `.env` and edit. Highlights:
 | `PORT` | `3000` | HTTP port |
 | `HOST` | `127.0.0.1` | Bind address (keep loopback behind a proxy) |
 | `TIMEOUT_MS` | `5000` | Cap for the one-shot `/api/run` |
-| `RUN_IDLE_MS` | `30000` | Stop an interactive run after this much inactivity |
+| `RUN_IDLE_MS` | `120000` | Stop an interactive run after this much inactivity |
 | `RUN_MAX_MS` | `120000` | Absolute cap for an interactive run |
 | `MEMORY_LIMIT_MB` | `128` | Virtual-memory cap (`ulimit -v`) |
 | `MAX_CONCURRENT_RUNS` | `2` | Programs running at once (memory guard) |

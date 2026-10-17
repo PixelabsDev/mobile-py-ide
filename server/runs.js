@@ -130,10 +130,12 @@ export async function createRun(code, opts = {}) {
   let hardTimer = null;
   let safetyTimer = null;
   let resolved = false;
+  let eventSequence = 0;
   let resolveDone;
   run.done = new Promise((r) => { resolveDone = r; });
 
   function emit(evt) {
+    evt.id = ++eventSequence;
     log.push(evt);
     if (log.length > LOG_CAP) log.shift();
     for (const fn of [...listeners]) {
@@ -215,6 +217,7 @@ export async function createRun(code, opts = {}) {
     run.elapsedMs = Date.now() - run.startedAt;
 
     const evt = {
+      id: ++eventSequence,
       type: 'exit',
       status: run.status,
       exit_code: run.exitCode,
@@ -362,8 +365,9 @@ export async function createRun(code, opts = {}) {
 
   run.kill = () => stop('killed');
 
-  run.subscribe = (fn) => {
+  run.subscribe = (fn, afterId = 0) => {
     for (const evt of log) {
+      if (evt.id <= afterId) continue;
       try { fn(evt); } catch { /* ignore */ }
     }
     if (run.finished) return () => {};
