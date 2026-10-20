@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { validate } from '../server/validator.js';
 import { execute } from '../server/executor.js';
-import { createRun } from '../server/runs.js';
+import { createRun, activeRunCount } from '../server/runs.js';
 import { REPL_SOURCE } from '../server/modes.js';
 import { isAllowed, uninstallPackage, listInstalled } from '../server/packages.js';
 import { safePath, writeFile, readFile, deleteFile, renameFile } from '../server/files.js';
@@ -132,6 +132,23 @@ await checkAsync('enforces the timeout', async () => {
 await checkAsync('math works', async () => {
   const r = await execute({ code: 'import math\nprint(math.factorial(5))' });
   assert.equal(r.stdout.trim(), '120');
+});
+
+console.log('\nRuns management');
+await checkAsync('tracks active run count', async () => {
+  const initial = activeRunCount();
+
+  const run1 = await createRun('while True:\n    pass\n', { idleMs: 15000, maxMs: 20000 });
+  assert.equal(activeRunCount(), initial + 1);
+
+  const run2 = await createRun('while True:\n    pass\n', { idleMs: 15000, maxMs: 20000 });
+  assert.equal(activeRunCount(), initial + 2);
+
+  run1.kill();
+  run2.kill();
+  await run1.done;
+  await run2.done;
+
 });
 
 console.log('\nInteractive runs (live input)');
