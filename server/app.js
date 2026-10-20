@@ -159,7 +159,10 @@ function releaseSlot() {
 // have cached, and the assets themselves can then be cached forever.
 let ASSET_VERSION = 'dev';
 
+let cachedAssetVersion = null;
+
 async function computeAssetVersion() {
+  if (cachedAssetVersion) return cachedAssetVersion;
   const names = ['index.html', 'main.js', 'style.css', 'download.js', 'manifest.webmanifest'];
   const parts = [];
   for (const name of names) {
@@ -168,7 +171,8 @@ async function computeAssetVersion() {
       parts.push(`${name}:${st.size}:${Math.round(st.mtimeMs)}`);
     } catch { /* a missing file just does not contribute */ }
   }
-  return crypto.createHash('sha1').update(parts.join('|')).digest('hex').slice(0, 12);
+  cachedAssetVersion = crypto.createHash('sha1').update(parts.join('|')).digest('hex').slice(0, 12);
+  return cachedAssetVersion;
 }
 
 computeAssetVersion().then((v) => { ASSET_VERSION = v; }).catch(() => {});
