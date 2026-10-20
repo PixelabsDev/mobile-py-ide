@@ -86,10 +86,12 @@ export async function globalTotal(maxAgeMs = 60000) {
   } catch {
     return globalCache.total;
   }
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
-    total += await dirSize(path.join(config.workspaceDir, e.name));
-  }
+  const sizes = await Promise.all(
+    entries
+      .filter((e) => e.isDirectory())
+      .map((e) => dirSize(path.join(config.workspaceDir, e.name)))
+  );
+  total = sizes.reduce((acc, size) => acc + size, 0);
   globalCache = { at: Date.now(), total };
   return total;
 }
