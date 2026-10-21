@@ -29,6 +29,7 @@ import { listFiles, readFile, writeFile, deleteFile, renameFile, safePath, dirSi
 import { diagnostics } from './diag.js';
 import { identify, touch, startSweeper, perUserLimitBytes } from './spaces.js';
 import { acceptWebSocket } from './ws.js';
+import logger from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -576,8 +577,7 @@ const server = http.createServer(async (req, res) => {
     res.end('Method not allowed');
     return undefined;
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('request failed:', err && err.stack ? err.stack : err);
+    logger.error('request failed:', err && err.stack ? err.stack : err);
     return json(res, 500, { status: 'error', error: 'Internal server error.' });
   }
 });
@@ -645,9 +645,8 @@ server.on('upgrade', (req, socket) => {
 });
 
 server.listen(config.port, config.host, () => {
-  // eslint-disable-next-line no-console
-  console.log(`PyPad running at http://${config.host}:${config.port}`);
-  console.log(`  modes=script,repl${config.allowTerminal ? ',terminal' : ''}  packages=${config.allowPackageInstall}  memory=${config.memoryLimitMb}MB`);
+  logger.info(`PyPad running at http://${config.host}:${config.port}`);
+  logger.info(`  modes=script,repl${config.allowTerminal ? ',terminal' : ''}  packages=${config.allowPackageInstall}  memory=${config.memoryLimitMb}MB`);
 });
 
 export default server;
