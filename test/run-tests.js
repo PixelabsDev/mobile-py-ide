@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { validate } from '../server/validator.js';
 import { execute } from '../server/executor.js';
-import { createRun } from '../server/runs.js';
+import { createRun, getRun } from '../server/runs.js';
 import { REPL_SOURCE } from '../server/modes.js';
 import { isAllowed, uninstallPackage, listInstalled } from '../server/packages.js';
 import { safePath, writeFile, readFile, deleteFile, renameFile } from '../server/files.js';
@@ -132,6 +132,17 @@ await checkAsync('enforces the timeout', async () => {
 await checkAsync('math works', async () => {
   const r = await execute({ code: 'import math\nprint(math.factorial(5))' });
   assert.equal(r.stdout.trim(), '120');
+});
+
+console.log('\nRuns management');
+await checkAsync('getRun retrieves a created run by id', async () => {
+  const run = await createRun('print("test")\n', { idleMs: 1000, maxMs: 1000 });
+  const retrieved = getRun(run.id);
+  assert.equal(retrieved, run);
+  await run.done;
+});
+await checkAsync('getRun returns undefined for non-existent id', async () => {
+  assert.equal(getRun('definitely-not-an-id'), undefined);
 });
 
 console.log('\nInteractive runs (live input)');
