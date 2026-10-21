@@ -29,6 +29,7 @@ import { listFiles, readFile, writeFile, deleteFile, renameFile, safePath, dirSi
 import { diagnostics } from './diag.js';
 import { identify, touch, startSweeper, perUserLimitBytes } from './spaces.js';
 import { acceptWebSocket } from './ws.js';
+import logger from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -159,7 +160,10 @@ function releaseSlot() {
 // have cached, and the assets themselves can then be cached forever.
 let ASSET_VERSION = 'dev';
 
+let cachedAssetVersion = null;
+
 async function computeAssetVersion() {
+  if (cachedAssetVersion) return cachedAssetVersion;
   const names = ['index.html', 'main.js', 'style.css', 'download.js', 'manifest.webmanifest'];
   const parts = [];
   for (const name of names) {
@@ -168,7 +172,8 @@ async function computeAssetVersion() {
       parts.push(`${name}:${st.size}:${Math.round(st.mtimeMs)}`);
     } catch { /* a missing file just does not contribute */ }
   }
-  return crypto.createHash('sha1').update(parts.join('|')).digest('hex').slice(0, 12);
+  cachedAssetVersion = crypto.createHash('sha1').update(parts.join('|')).digest('hex').slice(0, 12);
+  return cachedAssetVersion;
 }
 
 computeAssetVersion().then((v) => { ASSET_VERSION = v; }).catch(() => {});
@@ -576,8 +581,7 @@ const server = http.createServer(async (req, res) => {
     res.end('Method not allowed');
     return undefined;
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('request failed:', err && err.stack ? err.stack : err);
+    logger.error('request failed:', err && err.stack ? err.stack : err);
     return json(res, 500, { status: 'error', error: 'Internal server error.' });
   }
 });
@@ -645,9 +649,8 @@ server.on('upgrade', (req, socket) => {
 });
 
 server.listen(config.port, config.host, () => {
-  // eslint-disable-next-line no-console
-  console.log(`PyPad running at http://${config.host}:${config.port}`);
-  console.log(`  modes=script,repl${config.allowTerminal ? ',terminal' : ''}  packages=${config.allowPackageInstall}  memory=${config.memoryLimitMb}MB`);
+  logger.info(`PyPad running at http://${config.host}:${config.port}`);
+  logger.info(`  modes=script,repl${config.allowTerminal ? ',terminal' : ''}  packages=${config.allowPackageInstall}  memory=${config.memoryLimitMb}MB`);
 });
 
 export default server;

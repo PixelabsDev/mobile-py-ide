@@ -73,6 +73,88 @@ function buildCommand({ filePath, kind, memoryMb, maxMs, ptyCmd }) {
   return `${limits} ${py}`;
 }
 
+
+class OutputBatcher {
+  constructor(options) {
+    this.raw = options.raw;
+    this.termText = options.termText;
+    this.emit = options.emit;
+    this.stop = options.stop;
+    this.touchIdle = options.touchIdle;
+    this.run = options.run;
+
+    this.pending = { stdout: '', stderr: '', raw: Buffer.alloc(0) };
+    this.flushTimer = null;
+
+    this.flush = this.flush.bind(this);
+    this.onData = this.onData.bind(this);
+  }
+
+  flush() {
+    if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    if (this.raw) {
+      if (!this.pending.raw.length) return;
+      const piece = this.pending.raw;
+      this.pending.raw = Buffer.alloc(0);
+      this.emit({
+        type: 'output',
+        raw: true,
+        stream: 'stdout',
+        b64: piece.toString('base64'),
+        text: this.termText.push(piece),
+      });
+      return;
+    }
+    for (const stream of ['stdout', 'stderr']) {
+      if (!this.pending[stream]) continue;
+      const text = this.pending[stream];
+      this.pending[stream] = '';
+      this.emit({ type: 'output', stream, text });
+    }
+  }
+
+  scheduleFlush() {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(this.flush, OUTPUT_FLUSH_MS);
+  }
+
+  onData(stream, buf) {
+    const run = this.run;
+    if (run.finished || run.truncated) return;
+    const remaining = config.maxOutputBytes - run.outputBytes;
+    if (remaining <= 0) { run.truncated = true; this.stop('output_limit'); return; }
+
+    let piece = buf;
+    if (piece.length >= remaining) {
+      piece = piece.subarray(0, remaining);
+      run.outputBytes = config.maxOutputBytes;
+      run.truncated = true;
+    } else {
+      run.outputBytes += piece.length;
+    }
+
+    if (this.raw) {
+      this.pending.raw = Buffer.concat([this.pending.raw, piece]);
+    } else {
+      const text = piece.toString('utf8');
+      if (stream === 'stdout') run.stdout += text; else run.stderr += text;
+      this.pending[stream] += text;
+    }
+
+    const held = this.raw ? this.pending.raw.length : this.pending.stdout.length + this.pending.stderr.length;
+    if (held >= OUTPUT_BATCH_BYTES) this.flush();
+    else this.scheduleFlush();
+
+    if (run.truncated) {
+      this.flush();
+      if (!this.raw) this.emit({ type: 'output', stream: 'stderr', text: '\n… output limit reached, stopping.\n' });
+      this.stop('output_limit');
+      return;
+    }
+    this.touchIdle();
+  }
+}
+
 /**
  * Start a program.
  * @param {string} code
@@ -143,43 +225,6 @@ export async function createRun(code, opts = {}) {
     }
   }
 
-  // Output is gathered here and released in batches by the two functions
-  // below, rather than one event per write from the program.
-  const pending = { stdout: '', stderr: '', raw: Buffer.alloc(0) };
-  let flushTimer = null;
-
-  function flushOutput() {
-    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-    if (raw) {
-      if (!pending.raw.length) return;
-      const piece = pending.raw;
-      pending.raw = Buffer.alloc(0);
-      // A terminal stream is bytes, not text — the WebSocket sends them as they
-      // are. The same chunk also goes out as cleaned-up text, so the line-based
-      // console (and a browser running an older copy of the page) still gets
-      // something readable instead of nothing at all.
-      emit({
-        type: 'output',
-        raw: true,
-        stream: 'stdout',
-        b64: piece.toString('base64'),
-        text: termText.push(piece),
-      });
-      return;
-    }
-    for (const stream of ['stdout', 'stderr']) {
-      if (!pending[stream]) continue;
-      const text = pending[stream];
-      pending[stream] = '';
-      emit({ type: 'output', stream, text });
-    }
-  }
-
-  function scheduleFlush() {
-    if (flushTimer) return;
-    flushTimer = setTimeout(flushOutput, OUTPUT_FLUSH_MS);
-  }
-
   function killTree(sig = 'SIGKILL') {
     if (run.child && run.child.pid) {
       try { process.kill(-run.child.pid, sig); } catch { /* already gone */ }
@@ -199,13 +244,24 @@ export async function createRun(code, opts = {}) {
     idleTimer = setTimeout(() => stop('idle'), idleMs);
   }
 
+  // Output is gathered here and released in batches by the batcher,
+  // rather than one event per write from the program.
+  const batcher = new OutputBatcher({
+    raw,
+    termText,
+    emit,
+    stop,
+    touchIdle,
+    run
+  });
+
   function finalize() {
     if (run.finished) return;
     run.finished = true;
     clearTimeout(idleTimer);
     clearTimeout(hardTimer);
     clearTimeout(safetyTimer);
-    flushOutput();
+    batcher.flush();
     try { if (run.child && run.child.stdin) run.child.stdin.end(); } catch { /* ignore */ }
     killTree();
 
@@ -244,44 +300,6 @@ export async function createRun(code, opts = {}) {
     }, config.runRetainMs).unref();
     rm(dir, { recursive: true, force: true }).catch(() => {});
     if (!resolved) { resolved = true; resolveDone(evt); }
-  }
-
-  function onData(stream, buf) {
-    if (run.finished || run.truncated) return;
-    const remaining = config.maxOutputBytes - run.outputBytes;
-    if (remaining <= 0) { run.truncated = true; stop('output_limit'); return; }
-
-    let piece = buf;
-    if (piece.length >= remaining) {
-      piece = piece.subarray(0, remaining);
-      run.outputBytes = config.maxOutputBytes;
-      run.truncated = true;
-    } else {
-      run.outputBytes += piece.length;
-    }
-
-    if (raw) {
-      pending.raw = Buffer.concat([pending.raw, piece]);
-    } else {
-      const text = piece.toString('utf8');
-      if (stream === 'stdout') run.stdout += text; else run.stderr += text;
-      pending[stream] += text;
-    }
-
-    // A loop printing one character at a time writes one chunk per character,
-    // and a hundred thousand SSE events is more than a phone can draw. Send a
-    // batch instead — on a short timer, or as soon as one grows large.
-    const held = raw ? pending.raw.length : pending.stdout.length + pending.stderr.length;
-    if (held >= OUTPUT_BATCH_BYTES) flushOutput();
-    else scheduleFlush();
-
-    if (run.truncated) {
-      flushOutput();
-      if (!raw) emit({ type: 'output', stream: 'stderr', text: '\n… output limit reached, stopping.\n' });
-      stop('output_limit');
-      return;
-    }
-    touchIdle();
   }
 
   // The venv's bin comes first so `python3` and `pip` inside the terminal mean
@@ -328,8 +346,8 @@ export async function createRun(code, opts = {}) {
 
   const child = run.child;
   child.stdin.on('error', () => { /* EPIPE once the program exits — ignore */ });
-  child.stdout.on('data', (b) => onData('stdout', b));
-  child.stderr.on('data', (b) => onData('stderr', b));
+  child.stdout.on('data', (b) => batcher.onData('stdout', b));
+  child.stderr.on('data', (b) => batcher.onData('stderr', b));
   child.on('error', (e) => {
     emit({ type: 'output', stream: 'stderr', text: `Runner error: ${e.message}\n` });
     stop('killed');
