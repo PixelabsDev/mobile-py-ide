@@ -68,6 +68,9 @@ check('allows plain code', () => {
 check('allows safe imports', () => {
   assert.equal(validate('import math\nfrom random import randint').ok, true);
 });
+check('allows pypdf imports', () => {
+  assert.equal(validate('from pypdf import PdfReader, PdfWriter').ok, true);
+});
 check('blocks heavy ML libraries', () => {
   const r = validate('import torch');
   assert.equal(r.ok, false);
@@ -246,7 +249,7 @@ check('refuses a heavy package', () => assert.equal(isAllowed('torch'), false));
 check('refuses shell metacharacters', () => assert.equal(isAllowed('rich; rm -rf /'), false));
 check('refuses an unknown name', () => assert.equal(isAllowed('definitely-not-a-real-pkg'), false));
 check('allows the packages added later', () => {
-  for (const p of ['python-slugify', 'pylightxl', 'humanfriendly']) {
+  for (const p of ['python-slugify', 'pylightxl', 'humanfriendly', 'aiohttp', 'asyncio']) {
     assert.equal(isAllowed(p), true, `${p} should be allowed`);
   }
 });

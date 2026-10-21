@@ -352,8 +352,9 @@ main {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: var(--symbol-h);
-  padding: 0 8px calc(0px + var(--safe-b));
+  min-height: 48px;
+  height: auto;
+  padding: 6px 8px calc(6px + var(--safe-b));
   background: var(--bg-elev);
   border-top: 1px solid var(--border);
   overflow-x: auto;

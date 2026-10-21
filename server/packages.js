@@ -21,6 +21,7 @@ function norm(n) {
 // Python 3.) Accept either spelling so nobody has to know that.
 const ALIASES = {
   slugify: 'python-slugify',
+  pypdf2: 'pypdf',
 };
 
 function resolveName(name) {

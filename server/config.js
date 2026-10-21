@@ -51,7 +51,7 @@ const BASE_ALLOWED = [
   'contextlib', 'warnings', 'traceback', 'uuid', 'hashlib', 'hmac', 'base64',
   'binascii', 'unicodedata', 'secrets', 'io', 'sys', 'code',
   // Light third-party libraries that are commonly pre-installed
-  'numpy', 'requests',
+  'numpy', 'requests', 'pypdf', 'pypdf2', 'aiohttp', 'asyncio',
 ];
 
 // Light, popular packages that may be installed from the IDE. Heavy ones
@@ -64,7 +64,7 @@ const BASE_PACKAGES = [
   'markdown', 'jinja2', 'qrcode', 'names', 'wonderwords', 'halo',
   'alive-progress', 'questionary', 'rich-argparse',
   // Added later — all pure Python, none of them heavy.
-  'python-slugify', 'pylightxl', 'humanfriendly',
+  'python-slugify', 'pylightxl', 'humanfriendly', 'pypdf', 'aiohttp', 'asyncio',
 ];
 
 // Modules that only make sense once programs are allowed to touch files.
@@ -79,7 +79,7 @@ const config = {
 
   // Execution limits
   timeoutMs: num('TIMEOUT_MS', 5000),
-  memoryLimitMb: num('MEMORY_LIMIT_MB', 128),
+  memoryLimitMb: num('MEMORY_LIMIT_MB', 1024),
   maxCodeBytes: num('MAX_CODE_BYTES', 100 * 1024),
   maxStdinBytes: num('MAX_STDIN_BYTES', 20 * 1024),
   maxOutputBytes: num('MAX_OUTPUT_BYTES', 100 * 1024),

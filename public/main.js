@@ -77,6 +77,9 @@ let cmView = null;
 let usingCM = false;
 // The editor commands (undo, redo, indent) — loaded with CodeMirror.
 let cmCommands = null;
+let fallbackHistory = [];
+let fallbackHistoryIndex = -1;
+let fallbackHistoryAt = 0;
 let es = null;
 let runId = null;
 let outputEmpty = true;
@@ -183,18 +186,26 @@ function pythonStructure(viewMod, stateMod) {
 
   function build(view) {
     const doc = view.state.doc;
-    const count = doc.lines;
+    const depth = new Map();
 
-    // Depth per line, in indent units. A blank line takes the depth of the next
-    // real line, so a rule runs through the blank line and stops exactly where
-    // its block stops, instead of breaking wherever a blank line appears.
-    const depth = new Array(count + 2).fill(0);
-    for (let n = 1; n <= count; n++) {
-      const t = doc.line(n).text;
-      depth[n] = t.trim() ? Math.min(12, Math.floor(indentOf(t) / 4)) : -1;
-    }
-    for (let n = count; n >= 1; n--) {
-      if (depth[n] === -1) depth[n] = n < count ? depth[n + 1] : 0;
+    // Only calculate guide depths for lines CodeMirror may draw. Resolving
+    // blank lines looks ahead once per visible range, bounded on huge files.
+    for (const range of view.visibleRanges) {
+      const first = doc.lineAt(range.from).number;
+      const last = doc.lineAt(range.to).number;
+      let nextDepth = 0;
+      for (let n = last + 1, scanned = 0; n <= doc.lines && scanned < SCAN_LIMIT; n++, scanned++) {
+        const text = doc.line(n).text;
+        if (text.trim()) {
+          nextDepth = Math.min(12, Math.floor(indentOf(text) / 4));
+          break;
+        }
+      }
+      for (let n = last; n >= first; n--) {
+        const text = doc.line(n).text;
+        if (text.trim()) nextDepth = Math.min(12, Math.floor(indentOf(text) / 4));
+        depth.set(n, nextDepth);
+      }
     }
 
     const block = activeBlock(view);
@@ -206,7 +217,7 @@ function pythonStructure(viewMod, stateMod) {
       while (pos <= to) {
         const line = doc.lineAt(pos);
         const n = line.number;
-        const d = depth[n];
+        const d = depth.get(n) ?? 0;
         const inBody = Boolean(block) && n > block.start && n <= block.end;
         // The wrap indent is the line's own indentation, so a long line that
         // wraps continues under the code rather than at column 0.
@@ -239,6 +250,10 @@ async function initEditor() {
   // an empty one for a few seconds, and anything typed into it was thrown away
   // the moment CodeMirror took over.
   fallback.value = initial;
+  fallbackHistory = [{ value: initial, start: 0, end: 0 }];
+  fallbackHistoryIndex = 0;
+  fallback.addEventListener('input', () => { saveCode(); recordFallbackHistory(); });
+  fallback.addEventListener('keydown', handleFallbackKeydown);
   try {
     const [cm, py, theme, commands, lang, cmView2, cmState] = await Promise.all([
       import('https://esm.sh/codemirror@6.0.1'),
@@ -293,8 +308,6 @@ async function initEditor() {
     usingCM = false;
     editorMount.style.display = 'none';
     fallback.style.display = 'block';
-    fallback.addEventListener('input', saveCode);
-    fallback.addEventListener('keydown', handleFallbackKeydown);
   }
 }
 
@@ -324,7 +337,14 @@ function insertAtCursor(el, text, back) {
 
 function insertText(text, back = 0) {
   if (targetIsInput()) { insertAtCursor(inputLine, text, back); return; }
+  const closers = new Set([')', ']', '}', '"', "'"]);
   if (usingCM) {
+    const range = cmView.state.selection.main;
+    if (range.empty && closers.has(text) && cmView.state.doc.sliceString(range.head, range.head + 1) === text) {
+      cmView.dispatch({ selection: { anchor: range.head + 1 } });
+      cmView.focus();
+      return;
+    }
     cmView.dispatch(cmView.state.replaceSelection(text));
     if (back) {
       const pos = cmView.state.selection.main.head - back;
@@ -332,21 +352,129 @@ function insertText(text, back = 0) {
     }
     cmView.focus();
   } else {
+    if (fallback.selectionStart === fallback.selectionEnd && closers.has(text)
+        && fallback.value[fallback.selectionStart] === text) {
+      fallback.setSelectionRange(fallback.selectionStart + 1, fallback.selectionStart + 1);
+      fallback.focus();
+      return;
+    }
     insertAtCursor(fallback, text, back);
   }
   saveCode();
 }
 
+function insertPair(open, close) {
+  if (targetIsInput()) { insertText(open); return; }
+  if (usingCM) {
+    const range = cmView.state.selection.main;
+    const selected = cmView.state.sliceDoc(range.from, range.to);
+    cmView.dispatch({
+      changes: { from: range.from, to: range.to, insert: open + selected + close },
+      selection: { anchor: range.from + 1, head: range.from + 1 + selected.length },
+    });
+    cmView.focus();
+  } else {
+    const start = fallback.selectionStart ?? 0;
+    const end = fallback.selectionEnd ?? start;
+    const selected = fallback.value.slice(start, end);
+    fallback.setRangeText(open + selected + close, start, end, 'select');
+    fallback.setSelectionRange(start + 1, start + 1 + selected.length);
+    fallback.focus();
+    fallback.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  saveCode();
+}
+
+function recordFallbackHistory() {
+  const current = {
+    value: fallback.value,
+    start: fallback.selectionStart,
+    end: fallback.selectionEnd,
+  };
+  const previous = fallbackHistory[fallbackHistoryIndex];
+  if (previous?.value === current.value) {
+    fallbackHistory[fallbackHistoryIndex] = current;
+    return;
+  }
+  fallbackHistory = fallbackHistory.slice(0, fallbackHistoryIndex + 1);
+  const now = Date.now();
+  if (fallbackHistory.length > 1 && now - fallbackHistoryAt < 700) {
+    fallbackHistory[fallbackHistory.length - 1] = current;
+  } else {
+    fallbackHistory.push(current);
+    if (fallbackHistory.length > 200) fallbackHistory.shift();
+  }
+  fallbackHistoryIndex = fallbackHistory.length - 1;
+  fallbackHistoryAt = now;
+}
+
+function stepFallbackHistory(delta) {
+  const next = fallbackHistoryIndex + delta;
+  if (next < 0 || next >= fallbackHistory.length) return false;
+  fallbackHistoryIndex = next;
+  const snapshot = fallbackHistory[next];
+  fallback.value = snapshot.value;
+  fallback.setSelectionRange(snapshot.start, snapshot.end);
+  fallback.focus();
+  saveCode();
+  return true;
+}
+
+function opensPythonBlock(prefix) {
+  let quote = '';
+  let triple = false;
+  let escaped = false;
+  let depth = 0;
+  for (let i = 0; i < prefix.length; i++) {
+    const ch = prefix[i];
+    if (quote) {
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
+      if (triple && prefix.slice(i, i + 3) === quote.repeat(3)) {
+        quote = '';
+        triple = false;
+        i += 2;
+      } else if (!triple && ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '#') break;
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      triple = prefix.slice(i, i + 3) === ch.repeat(3);
+      if (triple) i += 2;
+    } else if ('([{'.includes(ch)) depth++;
+    else if (')]}'.includes(ch)) depth = Math.max(0, depth - 1);
+  }
+  const code = prefix.trim();
+  return depth === 0
+    && /^(?:async\s+)?(?:if|elif|else|for|while|try|except|finally|with|def|class|match|case)\b/.test(code)
+    && /:\s*(?:#.*)?$/.test(code);
+}
+
 // One of CodeMirror's own commands. Returns false when there is no editor, so
 // the caller can fall back.
 function editorCommand(name) {
-  if (!usingCM || !cmCommands) return false;
+  if (!usingCM || !cmCommands) {
+    if (name === 'undo') return stepFallbackHistory(-1);
+    if (name === 'redo') return stepFallbackHistory(1);
+    return false;
+  }
   const fn = cmCommands[name];
   if (typeof fn !== 'function') return false;
   fn(cmView);
   cmView.focus();
   saveCode();
   return true;
+}
+
+function indentFromToolbar() {
+  if (targetIsInput()) { insertText('    '); return; }
+  if (usingCM && !cmView.state.selection.main.empty && editorCommand('indentMore')) return;
+  if (!usingCM && fallback.selectionStart !== fallback.selectionEnd) {
+    editFallbackIndent(true);
+    return;
+  }
+  insertText('    ');
 }
 
 // Take one indent level off, on every line the cursor or selection touches.
@@ -418,6 +546,12 @@ function editFallbackIndent(add) {
 
 function handleFallbackKeydown(e) {
   const el = fallback;
+  const pairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'" };
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y')) {
+    e.preventDefault();
+    stepFallbackHistory(e.key.toLowerCase() === 'y' || e.shiftKey ? 1 : -1);
+    return;
+  }
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
     onRunClick();
@@ -439,7 +573,7 @@ function handleFallbackKeydown(e) {
     let indent = (before.match(/^[ \t]*/) || [''])[0];
     if (/^\s*(?:return\b|pass\b|break\b|continue\b|raise\b)/.test(before)) {
       indent = indent.replace(/\t| {1,4}$/, '');
-    } else if (/:(?:\s*#.*)?\s*$/.test(before)) {
+    } else if (opensPythonBlock(before)) {
       indent += '    ';
     }
     el.setRangeText(`\n${indent}`, start, end, 'end');
@@ -450,6 +584,13 @@ function handleFallbackKeydown(e) {
     const pos = el.selectionStart;
     const lineStart = el.value.lastIndexOf('\n', pos - 1) + 1;
     const before = el.value.slice(lineStart, pos);
+    const previous = el.value[pos - 1];
+    if (pairs[previous] === el.value[pos]) {
+      e.preventDefault();
+      el.setRangeText('', pos - 1, pos + 1, 'end');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
     if (/^(?:\t| )+$/.test(before)) {
       e.preventDefault();
       const remove = before.endsWith('\t') ? 1 : (before.length % 4 || Math.min(4, before.length));
@@ -458,7 +599,6 @@ function handleFallbackKeydown(e) {
       return;
     }
   }
-  const pairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'" };
   const start = el.selectionStart ?? 0;
   const end = el.selectionEnd ?? start;
   if (!e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -517,11 +657,16 @@ $('#symbolbar').addEventListener('click', (e) => {
   e.preventDefault();
   if (btn.dataset.hist) { shellHistoryStep(btn.dataset.hist === 'up' ? -1 : 1); return; }
   if (btn.dataset.ctrl === 'c') { sendCtrlC(); return; }
-  if (btn.dataset.key === 'tab') { insertText('    '); return; }
+  if (btn.dataset.key === 'tab') { indentFromToolbar(); return; }
   if (btn.dataset.key === 'untab') { unindent(); return; }
   if (btn.dataset.key === 'undo') { editorCommand('undo'); return; }
   if (btn.dataset.key === 'redo') { editorCommand('redo'); return; }
-  if (btn.dataset.insert !== undefined) insertText(btn.dataset.insert, Number(btn.dataset.back || 0));
+  if (btn.dataset.insert !== undefined) {
+    const pairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'" };
+    const value = btn.dataset.insert;
+    if (mode === 'script' && pairs[value]) insertPair(value, pairs[value]);
+    else insertText(value, Number(btn.dataset.back || 0));
+  }
 });
 
 /* --------------------------- console --------------------------------- */
@@ -733,7 +878,12 @@ function finishRun(e) {
   setRunning(false);
   reportNewFiles();
   const t = e.elapsed_ms ? ` · ${(e.elapsed_ms / 1000).toFixed(2)}s` : '';
-  if (e.status === 'success') setStatus('success', `✓ Done${t} · exit ${e.exit_code ?? 0}`);
+  if (e.status === 'success') {
+    setStatus('success', `✓ Done${t} · exit ${e.exit_code ?? 0}`);
+    if (outputEmpty && mode === 'script') {
+      appendOutput('✓ Program completed with no output (exit code 0).\n💡 Tip: Did you forget print(...) ? In Script mode, use print(value) to show output.\n', 'muted');
+    }
+  }
   else if (e.status === 'idle_timeout') setStatus('timeout', `⏱ Stopped: no activity${t}`);
   else if (e.status === 'timeout') setStatus('timeout', `⏱ Time limit reached${t}`);
   else if (e.status === 'output_limit') setStatus('error', `✗ Stopped: too much output${t}`);
