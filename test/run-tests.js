@@ -5,11 +5,11 @@ import fs from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { validate } from '../server/validator.js';
 import { execute } from '../server/executor.js';
-import { createRun, activeRunCount } from '../server/runs.js';
+import { createRun, getRun, activeRunCount } from '../server/runs.js';
 import { REPL_SOURCE } from '../server/modes.js';
 import { isAllowed, uninstallPackage, listInstalled } from '../server/packages.js';
 import { safePath, writeFile, readFile, deleteFile, renameFile } from '../server/files.js';
-import { makeToken, readToken, spaceDir, sweep } from '../server/spaces.js';
+import { makeToken, readToken, spaceDir, sweep, parseCookies } from '../server/spaces.js';
 import config from '../server/config.js';
 import { pythonFilename, PYTHON_MIME } from '../public/download.js';
 import { createTerminalText } from '../server/terminal-text.js';
@@ -135,6 +135,15 @@ await checkAsync('math works', async () => {
 });
 
 console.log('\nRuns management');
+await checkAsync('getRun retrieves a created run by id', async () => {
+  const run = await createRun('print("test")\n', { idleMs: 1000, maxMs: 1000 });
+  const retrieved = getRun(run.id);
+  assert.equal(retrieved, run);
+  await run.done;
+});
+await checkAsync('getRun returns undefined for non-existent id', async () => {
+  assert.equal(getRun('definitely-not-an-id'), undefined);
+});
 await checkAsync('tracks active run count', async () => {
   const initial = activeRunCount();
 
@@ -427,6 +436,23 @@ await checkAsync('deleting a file that is not there returns false', async () => 
 await fs.rm(BASE, { recursive: true, force: true }).catch(() => {});
 
 console.log('\nSpaces (per-visitor isolation)');
+check('parseCookies handles missing or empty cookies', () => {
+  assert.deepEqual(parseCookies({ headers: {} }), {});
+  assert.deepEqual(parseCookies({ headers: { cookie: '' } }), {});
+  assert.deepEqual(parseCookies({ headers: { cookie: '   ' } }), {});
+});
+check('parseCookies parses basic cookies', () => {
+  assert.deepEqual(parseCookies({ headers: { cookie: 'foo=bar' } }), { foo: 'bar' });
+  assert.deepEqual(parseCookies({ headers: { cookie: 'foo=bar; baz=qux' } }), { foo: 'bar', baz: 'qux' });
+  assert.deepEqual(parseCookies({ headers: { cookie: 'foo=bar;baz=qux' } }), { foo: 'bar', baz: 'qux' });
+});
+check('parseCookies decodes values', () => {
+  assert.deepEqual(parseCookies({ headers: { cookie: 'foo=hello%20world' } }), { foo: 'hello world' });
+});
+check('parseCookies handles cookies with no equals sign', () => {
+  assert.deepEqual(parseCookies({ headers: { cookie: 'foo=bar; invalid; baz=qux' } }), { foo: 'bar', baz: 'qux' });
+});
+
 await checkAsync('tokens round-trip and forgeries are rejected', async () => {
   const id = 'a'.repeat(32);
   assert.equal(await readToken(await makeToken(id)), id);
