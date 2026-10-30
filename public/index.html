@@ -134,7 +134,9 @@
     <div class="sym-set" data-set="shell" hidden>
       <button type="button" data-hist="up" title="Previous command">↑</button>
       <button type="button" data-hist="down" title="Next command">↓</button>
-      <button type="button" data-ctrl="c" title="Interrupt the running command">⌃C</button>
+      <button type="button" id="ctrlBtn" data-ctrl="mod" class="ctrl-mod-btn" aria-pressed="false" title="Control modifier (tap to toggle, then press a key)">⌃ Ctrl</button>
+      <button type="button" data-key="tab" title="Tab completion">⇥ Tab</button>
+      <button type="button" data-key="esc" title="Escape">⎋ Esc</button>
       <span class="divider"></span>
       <button type="button" data-insert="|">|</button>
       <button type="button" data-insert="&amp;">&amp;</button>

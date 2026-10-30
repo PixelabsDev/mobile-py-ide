@@ -505,5 +505,49 @@ await checkAsync('a pty terminal runs a shell (a $ prompt)', async () => {
   assert.match(clean, /\$\s/, 'expected a shell prompt');
 });
 
+console.log('\nTerminal control key mappings');
+{
+  const src = await fs.readFile(new URL('../public/main.js', import.meta.url), 'utf8');
+  const start = src.indexOf('function charToControlCode(key) {');
+  const end = src.indexOf('\n}\n', start);
+  assert.ok(start !== -1 && end !== -1, 'charToControlCode exists in main.js');
+  // eslint-disable-next-line no-eval
+  const charToControlCode = eval(`(${src.slice(start, end + 2)})`);
+
+  check('maps Ctrl+C to ASCII 3', () => {
+    assert.equal(charToControlCode('c'), '\x03');
+    assert.equal(charToControlCode('C'), '\x03');
+  });
+  check('maps Ctrl+D to ASCII 4 (EOF)', () => {
+    assert.equal(charToControlCode('d'), '\x04');
+    assert.equal(charToControlCode('D'), '\x04');
+  });
+  check('maps Ctrl+Z to ASCII 26 (suspend)', () => {
+    assert.equal(charToControlCode('z'), '\x1a');
+    assert.equal(charToControlCode('Z'), '\x1a');
+  });
+  check('maps Ctrl+L to ASCII 12 (form feed/clear)', () => {
+    assert.equal(charToControlCode('l'), '\x0c');
+  });
+  check('maps navigation and editing controls (Ctrl+A, Ctrl+E, Ctrl+U, Ctrl+W)', () => {
+    assert.equal(charToControlCode('a'), '\x01');
+    assert.equal(charToControlCode('e'), '\x05');
+    assert.equal(charToControlCode('u'), '\x15');
+    assert.equal(charToControlCode('w'), '\x17');
+  });
+  check('maps Escape, Tab, Enter, Backspace and brackets', () => {
+    assert.equal(charToControlCode('Escape'), '\x1b');
+    assert.equal(charToControlCode('['), '\x1b');
+    assert.equal(charToControlCode('Tab'), '\t');
+    assert.equal(charToControlCode('Enter'), '\n');
+    assert.equal(charToControlCode('Backspace'), '\x08');
+  });
+  check('returns null for non-control keys', () => {
+    assert.equal(charToControlCode(''), null);
+    assert.equal(charToControlCode('Shift'), null);
+    assert.equal(charToControlCode(null), null);
+  });
+}
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

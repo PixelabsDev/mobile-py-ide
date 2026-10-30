@@ -316,6 +316,11 @@ function switchTab(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('active', p.id === name));
   if (name === 'editor' && usingCM) setTimeout(() => cmView.requestMeasure(), 0);
+  if (name === 'console' && termFit && !termMount.hidden) {
+    requestAnimationFrame(() => {
+      try { termFit.fit(); } catch { /* ignore */ }
+    });
+  }
 }
 document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => switchTab(t.dataset.tab)));
 
@@ -638,17 +643,113 @@ function shellHistoryStep(delta) {
   inputLine.focus();
 }
 
-// A bare 0x03 and no newline: that is what makes the terminal driver raise
-// SIGINT, instead of reading it as an empty line.
-async function sendCtrlC() {
+// Map a keyboard key or character to its corresponding ASCII control code.
+function charToControlCode(key) {
+  if (!key || typeof key !== 'string') return null;
+  if (key.length === 1) {
+    const code = key.toUpperCase().charCodeAt(0);
+    // ASCII '@' is 64 (\x00), 'A'-'Z' are 65-90 (\x01-\x1a)
+    // '[' is 91 (\x1b = ESC), '\' is 92 (\x1c), ']' is 93 (\x1d), '^' is 94 (\x1e), '_' is 95 (\x1f)
+    if (code >= 64 && code <= 95) {
+      return String.fromCharCode(code - 64);
+    }
+    if (key === '?') return '\x7f'; // DEL
+    if (key === '3') return '\x1b'; // ESC
+    if (key === '4') return '\x1c';
+    if (key === '5') return '\x1d';
+    if (key === '6') return '\x1e';
+    if (key === '7') return '\x1f';
+    if (key === '8') return '\x7f';
+  } else if (key === 'Backspace') {
+    return '\x08';
+  } else if (key === 'Enter') {
+    return '\n';
+  } else if (key === 'Tab') {
+    return '\t';
+  } else if (key === 'Escape') {
+    return '\x1b';
+  }
+  return null;
+}
+
+// Send raw control characters to the active terminal (WebSocket on desktop, HTTP on mobile).
+async function sendControlCode(str) {
+  if (!str) return;
+
+  // Send via WebSocket if open (pty xterm mode)
+  if (termWs && termWs.readyState === WebSocket.OPEN) {
+    sendTermInput(str);
+    return;
+  }
+
+  // Otherwise send via HTTP input endpoint
   if (!runId) return;
   try {
     await fetch(`/api/runs/${runId}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: '\u0003', raw: true }),
+      body: JSON.stringify({ data: str, raw: true }),
     });
   } catch { /* ignore */ }
+
+  // In line-based console: give visual feedback
+  if (!runIsPty || !isDesktop()) {
+    const c = str.charCodeAt(0);
+    if (c === 3) { // Ctrl+C
+      appendOutput('^C\n', 'echo');
+      inputLine.value = '';
+      inputLine.style.height = '';
+    } else if (c === 4) { // Ctrl+D
+      appendOutput('^D\n', 'echo');
+    } else if (c === 26) { // Ctrl+Z
+      appendOutput('^Z\n', 'echo');
+    } else if (c === 12) { // Ctrl+L (Clear screen)
+      clearOutput();
+    } else if (c === 21) { // Ctrl+U (Erase line)
+      inputLine.value = '';
+      inputLine.style.height = '';
+    } else if (c === 23) { // Ctrl+W (Erase word)
+      inputLine.value = inputLine.value.replace(/\S+\s*$/, '');
+    } else if (c === 1) { // Ctrl+A (Beginning of line)
+      inputLine.setSelectionRange(0, 0);
+    } else if (c === 5) { // Ctrl+E (End of line)
+      const len = inputLine.value.length;
+      inputLine.setSelectionRange(len, len);
+    }
+  }
+}
+
+// A bare 0x03 and no newline: that is what makes the terminal driver raise
+// SIGINT, instead of reading it as an empty line.
+async function sendCtrlC() {
+  return sendControlCode('\u0003');
+}
+
+// Ctrl modifier toggle (latching key for mobile virtual keyboard)
+let isCtrlActive = false;
+
+function setCtrlActive(on) {
+  isCtrlActive = Boolean(on);
+  const ctrlBtn = $('#ctrlBtn') || document.querySelector('[data-ctrl="mod"]');
+  if (ctrlBtn) {
+    ctrlBtn.classList.toggle('active', isCtrlActive);
+    ctrlBtn.setAttribute('aria-pressed', isCtrlActive ? 'true' : 'false');
+  }
+  const consoleInput = $('#inputForm');
+  if (consoleInput) {
+    consoleInput.classList.toggle('ctrl-active', isCtrlActive);
+  }
+  if (isCtrlActive) {
+    if (isDesktop() && term && !termMount.hidden) {
+      try { term.focus(); } catch { /* ignore */ }
+    } else {
+      inputLine.focus();
+    }
+  }
+}
+
+function toggleCtrlModifier() {
+  setCtrlActive(!isCtrlActive);
 }
 
 $('#symbolbar').addEventListener('click', (e) => {
@@ -656,12 +757,38 @@ $('#symbolbar').addEventListener('click', (e) => {
   if (!btn || btn.hidden) return;
   e.preventDefault();
   if (btn.dataset.hist) { shellHistoryStep(btn.dataset.hist === 'up' ? -1 : 1); return; }
-  if (btn.dataset.ctrl === 'c') { sendCtrlC(); return; }
-  if (btn.dataset.key === 'tab') { indentFromToolbar(); return; }
-  if (btn.dataset.key === 'untab') { unindent(); return; }
-  if (btn.dataset.key === 'undo') { editorCommand('undo'); return; }
-  if (btn.dataset.key === 'redo') { editorCommand('redo'); return; }
+  if (btn.dataset.ctrl === 'mod' || btn.id === 'ctrlBtn') { toggleCtrlModifier(); return; }
+  if (btn.dataset.ctrl === 'c') { sendCtrlC(); setCtrlActive(false); return; }
+  if (btn.dataset.key === 'tab') {
+    if (mode === 'terminal') {
+      sendControlCode('\t');
+    } else {
+      indentFromToolbar();
+    }
+    setCtrlActive(false);
+    return;
+  }
+  if (btn.dataset.key === 'esc') {
+    if (isCtrlActive) {
+      setCtrlActive(false);
+    } else {
+      sendControlCode('\x1b');
+    }
+    return;
+  }
+  if (btn.dataset.key === 'untab') { unindent(); setCtrlActive(false); return; }
+  if (btn.dataset.key === 'undo') { editorCommand('undo'); setCtrlActive(false); return; }
+  if (btn.dataset.key === 'redo') { editorCommand('redo'); setCtrlActive(false); return; }
   if (btn.dataset.insert !== undefined) {
+    if (isCtrlActive) {
+      const val = btn.dataset.insert.trim();
+      const ctrlChar = val ? charToControlCode(val[0]) : null;
+      setCtrlActive(false);
+      if (ctrlChar) {
+        sendControlCode(ctrlChar);
+        return;
+      }
+    }
     const pairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'" };
     const value = btn.dataset.insert;
     if (mode === 'script' && pairs[value]) insertPair(value, pairs[value]);
@@ -693,6 +820,10 @@ function paintOutput() {
   for (const node of paintQueue) frag.appendChild(node);
   paintQueue.length = 0;
   output.appendChild(frag);
+  // Cap rendered nodes so prolonged terminal sessions do not freeze mobile browser layout
+  while (output.childNodes.length > 2500) {
+    output.removeChild(output.firstChild);
+  }
   if (atBottom) output.scrollTop = output.scrollHeight;
 }
 
@@ -732,7 +863,11 @@ function setRunning(on) {
   inputLine.disabled = !on;
   sendBtn.disabled = !on;
   inputRow.classList.toggle('active', on);
-  if (!on) { inputLine.value = ''; inputLine.style.height = ''; }
+  if (!on) {
+    inputLine.value = '';
+    inputLine.style.height = '';
+    setCtrlActive(false);
+  }
 }
 
 function onRunClick() {
@@ -928,6 +1063,7 @@ function resetRun() {
   runIsPty = false;
   receivedEvents = false;
   setRunning(false);
+  setCtrlActive(false);
   setStatus('', '');
 }
 
@@ -957,16 +1093,98 @@ async function startRunLegacy(code, prefill) {
 /* input line */
 // Enter sends; the box grows as you type so a long command is readable.
 inputLine.addEventListener('keydown', (e) => {
+  // Physical Ctrl key combinations (when mode is terminal or repl)
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    const key = e.key.toLowerCase();
+    const hasSelection = inputLine.selectionStart !== inputLine.selectionEnd;
+    // Allow standard browser copy/paste/select-all if user explicitly selected text
+    if (hasSelection && (key === 'c' || key === 'a')) {
+      return;
+    }
+    if (key === 'v') {
+      return; // allow paste
+    }
+    if (mode === 'terminal' || mode === 'repl') {
+      const ctrlChar = charToControlCode(e.key);
+      if (ctrlChar) {
+        e.preventDefault();
+        sendControlCode(ctrlChar);
+        if (isCtrlActive) setCtrlActive(false);
+        return;
+      }
+    }
+  }
+
+  // Virtual Ctrl modifier active (toggled from toolbar button)
+  if (isCtrlActive) {
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') {
+      setCtrlActive(false);
+      return;
+    }
+    const ctrlChar = charToControlCode(e.key);
+    setCtrlActive(false);
+    if (ctrlChar) {
+      sendControlCode(ctrlChar);
+    }
+    return;
+  }
+
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     if (typeof inputForm.requestSubmit === 'function') inputForm.requestSubmit();
     else inputForm.dispatchEvent(new Event('submit', { cancelable: true }));
   }
 });
+
+// Mobile virtual keyboards (Android Chrome) often send characters via beforeinput
+inputLine.addEventListener('beforeinput', (e) => {
+  if (isCtrlActive && e.data) {
+    e.preventDefault();
+    e.stopPropagation();
+    const ctrlChar = charToControlCode(e.data);
+    setCtrlActive(false);
+    if (ctrlChar) {
+      sendControlCode(ctrlChar);
+    }
+  }
+});
+
 inputLine.addEventListener('input', () => {
+  if (isCtrlActive && inputLine.value.length > 0) {
+    // If virtual input inserted a character before beforeinput caught it
+    const lastChar = inputLine.value.slice(-1);
+    inputLine.value = inputLine.value.slice(0, -1);
+    const ctrlChar = charToControlCode(lastChar);
+    setCtrlActive(false);
+    if (ctrlChar) {
+      sendControlCode(ctrlChar);
+      return;
+    }
+  }
   inputLine.style.height = 'auto';
   inputLine.style.height = `${Math.min(inputLine.scrollHeight, 110)}px`;
 });
+
+// Global key interceptor when Ctrl modifier is active and focus is outside inputLine
+window.addEventListener('keydown', (e) => {
+  if (isCtrlActive && e.target !== inputLine) {
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') {
+      setCtrlActive(false);
+      return;
+    }
+    const ctrlChar = charToControlCode(e.key);
+    setCtrlActive(false);
+    if (ctrlChar) {
+      sendControlCode(ctrlChar);
+    }
+  }
+}, true);
 
 inputForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1626,6 +1844,23 @@ async function startPtyTerminal(nextMode) {
       // One handler for the life of the terminal; it follows the current socket.
       term.onData(sendTermInput);
 
+      term.attachCustomKeyEventHandler((e) => {
+        if (isCtrlActive && e.type === 'keydown') {
+          if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return false;
+          if (e.key === 'Escape') {
+            setCtrlActive(false);
+            return false;
+          }
+          const ctrlChar = charToControlCode(e.key);
+          setCtrlActive(false);
+          if (ctrlChar) {
+            sendControlCode(ctrlChar);
+            return false;
+          }
+        }
+        return true;
+      });
+
       // Paste. Ctrl+V only pastes when the terminal's hidden textarea holds
       // focus, which is easy to lose — so take the paste event over ourselves in
       // the capture phase. That makes it work wherever the click landed, and
@@ -1654,6 +1889,9 @@ async function startPtyTerminal(nextMode) {
 
     showTerminal(true);
     try { termFit.fit(); } catch { /* ignore */ }
+    requestAnimationFrame(() => {
+      try { termFit.fit(); } catch { /* ignore */ }
+    });
     bracketedPaste = false;
     term.reset();
     term.focus();
@@ -1714,6 +1952,7 @@ function onTerminalExit(msg) {
   termRunId = null;
   runId = null;
   setRunning(false);
+  setCtrlActive(false);
   if (msg.status === 'success') setStatus('success', `✓ Done${t}`);
   else if (msg.status === 'idle_timeout') setStatus('timeout', `⏱ Stopped: no activity${t}`);
   else if (msg.status === 'killed') setStatus('error', `■ Stopped${t}`);
@@ -1735,4 +1974,13 @@ function onTerminalExit(msg) {
   } catch { /* offline: keep the defaults */ }
 })();
 
-window.mobiPy = { startRun, stopRun, getCode, setCode, setMode };
+window.mobiPy = {
+  startRun,
+  stopRun,
+  getCode,
+  setCode,
+  setMode,
+  setCtrlActive,
+  charToControlCode,
+  sendControlCode,
+};

@@ -375,8 +375,29 @@ main {
   color: var(--text);
   font-family: var(--mono);
   font-size: 15px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
 }
 .symbolbar button:active { background: var(--accent); color: #fff; }
+.symbolbar button.active,
+.symbolbar button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(47, 129, 247, 0.45);
+  font-weight: 700;
+}
+.symbolbar button.ctrl-mod-btn { font-weight: 600; }
+.console-input.ctrl-active textarea {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(47, 129, 247, 0.35);
+}
+.console-input.ctrl-active .prompt {
+  color: var(--accent);
+}
 .symbolbar button.snip { font-size: 13px; }
 .symbolbar .divider { flex: 0 0 auto; width: 1px; height: 24px; background: var(--border); margin: 0 2px; }
 /* Two sets live in the bar — code tools and shell keys — and only one is
