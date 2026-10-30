@@ -743,7 +743,7 @@ function setCtrlActive(on) {
     if (isDesktop() && term && !termMount.hidden) {
       try { term.focus(); } catch { /* ignore */ }
     } else {
-      inputLine.focus();
+      inputLine.focus({ preventScroll: true });
     }
   }
 }
@@ -758,6 +758,12 @@ $('#symbolbar').addEventListener('click', (e) => {
   e.preventDefault();
   if (btn.dataset.hist) { shellHistoryStep(btn.dataset.hist === 'up' ? -1 : 1); return; }
   if (btn.dataset.ctrl === 'mod' || btn.id === 'ctrlBtn') { toggleCtrlModifier(); return; }
+  if (btn.dataset.ctrlKey) {
+    const code = charToControlCode(btn.dataset.ctrlKey);
+    if (code) sendControlCode(code);
+    setCtrlActive(false);
+    return;
+  }
   if (btn.dataset.ctrl === 'c') { sendCtrlC(); setCtrlActive(false); return; }
   if (btn.dataset.key === 'tab') {
     if (mode === 'terminal') {
@@ -1118,16 +1124,22 @@ inputLine.addEventListener('keydown', (e) => {
   // Virtual Ctrl modifier active (toggled from toolbar button)
   if (isCtrlActive) {
     if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
-    e.preventDefault();
-    e.stopPropagation();
+    if (e.key === 'Unidentified' || e.keyCode === 229) {
+      // Android software keyboard (IME) in progress: wait for beforeinput / input
+      return;
+    }
     if (e.key === 'Escape') {
+      e.preventDefault();
       setCtrlActive(false);
       return;
     }
     const ctrlChar = charToControlCode(e.key);
-    setCtrlActive(false);
     if (ctrlChar) {
+      e.preventDefault();
+      e.stopPropagation();
+      setCtrlActive(false);
       sendControlCode(ctrlChar);
+      return;
     }
     return;
   }
@@ -1144,7 +1156,7 @@ inputLine.addEventListener('beforeinput', (e) => {
   if (isCtrlActive && e.data) {
     e.preventDefault();
     e.stopPropagation();
-    const ctrlChar = charToControlCode(e.data);
+    const ctrlChar = charToControlCode(e.data[0]);
     setCtrlActive(false);
     if (ctrlChar) {
       sendControlCode(ctrlChar);
@@ -1152,16 +1164,22 @@ inputLine.addEventListener('beforeinput', (e) => {
   }
 });
 
-inputLine.addEventListener('input', () => {
-  if (isCtrlActive && inputLine.value.length > 0) {
-    // If virtual input inserted a character before beforeinput caught it
-    const lastChar = inputLine.value.slice(-1);
-    inputLine.value = inputLine.value.slice(0, -1);
-    const ctrlChar = charToControlCode(lastChar);
-    setCtrlActive(false);
-    if (ctrlChar) {
-      sendControlCode(ctrlChar);
-      return;
+inputLine.addEventListener('input', (e) => {
+  if (isCtrlActive) {
+    const rawChar = e.data || (inputLine.value ? inputLine.value.slice(-1) : '');
+    if (rawChar) {
+      const char = rawChar[0];
+      const ctrlChar = charToControlCode(char);
+      if (inputLine.value.endsWith(rawChar)) {
+        inputLine.value = inputLine.value.slice(0, -rawChar.length);
+      } else if (inputLine.value.endsWith(char)) {
+        inputLine.value = inputLine.value.slice(0, -1);
+      }
+      setCtrlActive(false);
+      if (ctrlChar) {
+        sendControlCode(ctrlChar);
+        return;
+      }
     }
   }
   inputLine.style.height = 'auto';
@@ -1172,15 +1190,17 @@ inputLine.addEventListener('input', () => {
 window.addEventListener('keydown', (e) => {
   if (isCtrlActive && e.target !== inputLine) {
     if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
-    e.preventDefault();
-    e.stopPropagation();
+    if (e.key === 'Unidentified' || e.keyCode === 229) return;
     if (e.key === 'Escape') {
+      e.preventDefault();
       setCtrlActive(false);
       return;
     }
     const ctrlChar = charToControlCode(e.key);
-    setCtrlActive(false);
     if (ctrlChar) {
+      e.preventDefault();
+      e.stopPropagation();
+      setCtrlActive(false);
       sendControlCode(ctrlChar);
     }
   }
